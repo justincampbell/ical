@@ -34,6 +34,7 @@ var (
 	updateID             string
 	updateInvite         []string
 	updateOccurrence     string
+	updateTravel         string
 )
 
 var updateCmd = &cobra.Command{
@@ -129,6 +130,19 @@ future (this and later occurrences), or all (the whole series).`,
 			b := updateAllDay == "true"
 			input.AllDay = &b
 		}
+		// All-day --end names the last day, the same as `add --all-day`.
+		if err := normalizeUpdateEnd(event, &input); err != nil {
+			return err
+		}
+		if cmd.Flags().Changed("travel") {
+			var d time.Duration
+			if !strings.EqualFold(updateTravel, "none") {
+				if d, err = parseDuration(updateTravel); err != nil {
+					return fmt.Errorf("invalid --travel duration: %w", err)
+				}
+			}
+			input.TravelTime = &d
+		}
 		if cmd.Flags().Changed("calendar") {
 			input.Calendar = strPtr(updateCalendar)
 		}
@@ -156,7 +170,7 @@ future (this and later occurrences), or all (the whole series).`,
 			} else {
 				alerts := make([]calendar.Alert, 0, len(updateAlerts))
 				for _, a := range updateAlerts {
-					d, err := dateparser.ParseAlertDuration(a)
+					d, err := parseDuration(a)
 					if err != nil {
 						return err
 					}
@@ -214,6 +228,7 @@ func init() {
 	updateCmd.Flags().StringVarP(&updateURL, "url", "u", "", "New URL (empty to clear)")
 	updateCmd.Flags().StringArrayVar(&updateAlerts, "alert", nil, "Replace alerts (repeatable, 'none' to clear)")
 	updateCmd.Flags().StringVar(&updateTimezone, "timezone", "", "New timezone")
+	updateCmd.Flags().StringVar(&updateTravel, "travel", "", "Travel time before the event (e.g. 30m, 1h10m; none to clear)")
 	updateCmd.Flags().StringVar(&updateSpan, "span", "this", "For recurring events: this, future, or all")
 	updateCmd.Flags().StringVar(&updateOccurrence, "occurrence", "", "For recurring events: the occurrence to change, by original date (or date and time)")
 	updateCmd.Flags().StringVarP(&updateRepeat, "repeat", "r", "", "Set/change recurrence (none to remove)")
@@ -377,15 +392,19 @@ func runUpdateInteractive(client *calendar.Client, event *calendar.Event) error 
 		input.StartDate = &newStart
 	}
 
-	if strings.TrimSpace(endStr) != "" {
-		newEnd, _ := dateparser.ParseDate(endStr) // validated above
-		if !newEnd.Equal(event.EndDate) {
-			input.EndDate = &newEnd
-		}
-	}
-
 	if allDay != event.AllDay {
 		input.AllDay = &allDay
+	}
+
+	if strings.TrimSpace(endStr) != "" {
+		newEnd, _ := dateparser.ParseDate(endStr) // validated above
+		input.EndDate = &newEnd
+		if err := normalizeUpdateEnd(event, &input); err != nil {
+			return err
+		}
+		if input.EndDate.Equal(event.EndDate) {
+			input.EndDate = nil
+		}
 	}
 
 	// Handle clearable fields (- to clear)
@@ -427,7 +446,7 @@ func runUpdateInteractive(client *calendar.Client, event *calendar.Event) error 
 				if a == "" {
 					continue
 				}
-				d, err := dateparser.ParseAlertDuration(a)
+				d, err := parseDuration(a)
 				if err != nil {
 					return err
 				}
